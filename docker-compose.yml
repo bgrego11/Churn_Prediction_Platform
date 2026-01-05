@@ -1,0 +1,174 @@
+# ============================================================================
+# CHURN PLATFORM - DOCKER COMPOSE
+# Postgres + Redis + Airflow Webserver/Scheduler
+# ============================================================================
+
+
+
+services:
+  # ========== POSTGRES (Raw Data + Airflow Metadata) ==========
+  postgres:
+    image: postgres:15-alpine
+    container_name: churn-postgres
+    environment:
+      POSTGRES_USER: churn_user
+      POSTGRES_PASSWORD: churn_password
+      POSTGRES_DB: churn_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres_init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U churn_user -d churn_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - churn_network
+
+  # ========== REDIS (Online Feature Store) ==========
+  redis:
+    image: redis:7-alpine
+    container_name: churn-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - churn_network
+
+  # ========== AIRFLOW DATABASE INIT ==========
+  airflow-init:
+    image: apache/airflow:2.7.3-python3.10
+    container_name: churn-airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db init
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com
+    environment:
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://churn_user:churn_password@postgres:5432/airflow_db
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      PYTHONPATH: /opt/airflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./airflow_dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./config:/opt/airflow/config
+      - airflow_logs:/opt/airflow/logs
+    networks:
+      - churn_network
+
+  # ========== AIRFLOW WEBSERVER ==========
+  airflow-webserver:
+    image: apache/airflow:2.7.3-python3.10
+    container_name: churn-airflow-webserver
+    command: webserver
+    environment:
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://churn_user:churn_password@postgres:5432/airflow_db
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      PYTHONPATH: /opt/airflow
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./airflow_dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./config:/opt/airflow/config
+      - airflow_logs:/opt/airflow/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - churn_network
+
+  # ========== AIRFLOW SCHEDULER ==========
+  airflow-scheduler:
+    image: apache/airflow:2.7.3-python3.10
+    container_name: churn-airflow-scheduler
+    command: scheduler
+    environment:
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://churn_user:churn_password@postgres:5432/airflow_db
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      PYTHONPATH: /opt/airflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./airflow_dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./config:/opt/airflow/config
+      - airflow_logs:/opt/airflow/logs
+    networks:
+      - churn_network
+
+  # ========== FASTAPI PREDICTION SERVICE ==========
+  fastapi:
+    image: churn-platform-api:latest
+    container_name: churn-fastapi
+    command: uvicorn src.inference.api:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: churn_db
+      POSTGRES_USER: churn_user
+      POSTGRES_PASSWORD: churn_password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MODEL_ARTIFACT_PATH: /app/data/models
+      OFFLINE_FEATURE_STORE_PATH: /app/data/features
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./config:/app/config
+    networks:
+      - churn_network
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+
+volumes:
+  postgres_data:
+  redis_data:
+  airflow_logs:
+
+networks:
+  churn_network:
+    driver: bridge

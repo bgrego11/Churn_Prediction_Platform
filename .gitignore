@@ -1,0 +1,143 @@
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv
+
+# IDE & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Docker & Database
+docker-compose.override.yml
+.dockerignore
+postgres_data/
+redis_data/
+airflow_logs/
+airflow_data/
+*.sql
+
+# Database Backups
+backups/
+*.sql.gz
+*.sql.bak
+
+# Model Artifacts & Data
+data/
+models/
+*.pkl
+*.h5
+*.joblib
+*.model
+artifacts/
+*.pth
+
+# Airflow Metadata
+airflow.db
+unittests.cfg
+logs/
+dags/__pycache__/
+
+# OS Files
+.DS_Store
+Thumbs.db
+*.tmp
+
+# Logs
+*.log
+logs/
+
+# IDE Temporary Files
+*.iml
+*.iws
+*.ipr
+
+# Node (if used for frontend)
+node_modules/
+npm-debug.log
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Temporary Files
+.tmp/
+tmp/
+temp/
+*.temp
+
+# Project-specific
+postgres_backups/
+feature_cache/
+prediction_cache/
+test_artifacts/
+
+# Credentials in various formats
+credentials.json
+secrets.json
+config.json
+*.key
+*.pem
+
+# Large files that should not be committed
+*.gz
+*.zip
+*.tar
+*.tar.gz
+
+# AWS/Cloud credentials
+.aws/
+.gcp/
+.azure/
+
+# Keep these directories but ignore their contents (except git-tracked files)
+data/.gitkeep
+models/.gitkeep
+backups/.gitkeep
