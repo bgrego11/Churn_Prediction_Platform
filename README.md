@@ -49,39 +49,155 @@ print(r.json())
 
 ---
 
-## Platform Architecture
-
-### 7 Complete Phases (All Delivered ✅)
+## System Data Flow Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                  CHURN PREDICTION PLATFORM                       │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Phase 1: Infrastructure                                        │
-│    Docker (6 services: FastAPI, PostgreSQL, Redis, etc)     │
-│                                                                  │
-│  Phase 2: Data Layer                                            │
-│    1,000 synthetic users | 1.4M events | 10% churn rate     │
-│                                                                  │
-│  Phase 3: Feature Engineering                                   │
-│    10 features per user | 8,000 vectors | Point-in-time OK  │
-│                                                                  │
-│  Phase 4: Model Training                                        │
-│    LogisticRegression | AUC 0.9979 | Precision 0.9954       │
-│                                                                  │
-│  Phase 5: Online Serving                                        │
-│    Redis cache | <0.5ms latency | 2,334 pred/sec           │
-│                                                                  │
-│  Phase 6: Monitoring                                            │
-│    Drift detection | Performance monitoring | Alerting      │
-│                                                                  │
-│  Phase 7: Advanced Features                                     │
-│    Model versioning | Automated retraining | A/B testing    │
-│    Production dashboards | Statistical significance         │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   CHURN PREDICTION PLATFORM                                     │
+│                                       Data & Prediction Flow                                    │
+└────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+                              ┌─────────────────────────────────────────┐
+                              │      DATA INGESTION LAYER               │
+                              │                                         │
+                              │  Synthetic Data Generator               │
+                              │  - Users, Events, Billing               │
+                              │  - Seed: 42 (reproducible)              │
+                              │  - 1,000 users, 1.4M events             │
+                              └──────────────┬──────────────────────────┘
+                                             │
+                    ┌────────────────────────┼────────────────────────┐
+                    │                        │                        │
+                    ▼                        ▼                        ▼
+        ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+        │  PostgreSQL (DB) │    │  PostgreSQL (DB) │    │  PostgreSQL (DB) │
+        │  raw_data.users  │    │ raw_data.events  │    │raw_data.billing  │
+        │   (1,000 rows)   │    │  (1.4M rows)     │    │  (events)        │
+        └────────────────┬─┘    └────────────┬─────┘    └────────────┬─────┘
+                         │                   │                        │
+                         └───────────────────┼────────────────────────┘
+                                             │
+                              ┌──────────────▼──────────────┐
+                              │  FEATURE ENGINEERING        │
+                              │                              │
+                              │ • Aggregations (30d, 90d)    │
+                              │ • Point-in-time correct      │
+                              │ • 10 features per user       │
+                              └──────────────┬───────────────┘
+                                             │
+                    ┌────────────────────────┼────────────────────────┐
+                    │                        │                        │
+                    ▼                        ▼                        ▼
+        ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────┐
+        │ OFFLINE FEATURE STORE│  │ ONLINE FEATURE STORE │  │  MODEL STORE │
+        │   PostgreSQL         │  │   Redis Cache        │  │  PostgreSQL  │
+        │ ml_pipeline.features │  │  (95%+ hit rate)     │  │ ml_pipeline. │
+        │  (8,000 vectors)     │  │  (Latest features)   │  │  models      │
+        └────────────┬─────────┘  └──────────┬───────────┘  └──────┬───────┘
+                     │                       │                     │
+                     │   ┌───────────────────┘                     │
+                     │   │                                         │
+                     ▼   ▼                                         ▼
+        ┌──────────────────────────────┐         ┌──────────────────────────┐
+        │  MODEL TRAINING              │         │  ONLINE SERVING          │
+        │                              │         │                          │
+        │ • Logistic Regression        │         │ • FastAPI REST API       │
+        │ • Point-in-time validation   │         │ • Sub-ms latency         │
+        │ • AUC: 0.9979                │         │ • Batch & single predict │
+        │ • Precision: 0.9954          │         │ • 2,334 pred/sec         │
+        │                              │         │                          │
+        └────────────┬─────────────────┘         └────────────┬─────────────┘
+                     │                                        │
+                     │                     ┌──────────────────┘
+                     │                     │
+                     ▼                     ▼
+        ┌──────────────────────────────────────────┐
+        │     MONITORING & DRIFT DETECTION         │
+        │                                          │
+        │  • KS-test for distribution shift        │
+        │  • Welch's t-test for feature drift      │
+        │  • Performance tracking (AUC, latency)   │
+        │  • Alert thresholds                      │
+        └────────────┬─────────────────────────────┘
+                     │
+                     ├─────────────────────────┐
+                     │                         │
+                     ▼                         ▼
+        ┌──────────────────────┐   ┌──────────────────────────┐
+        │  STABLE PERFORMANCE  │   │  DRIFT DETECTED          │
+        │  Continue Production │   │  Trigger Retraining      │
+        │  Monitor Metrics     │   │                          │
+        └──────────────────────┘   │ • Auto-retrain           │
+                                   │ • A/B test new model     │
+                                   │ • Model registry         │
+                                   │ • Safe rollout           │
+                                   └────────┬─────────────────┘
+                                            │
+                                            └──────────┐
+                                                       │
+                      ┌────────────────────────────────┘
+                      │
+                      ▼
+                  PRODUCTION READY
+                  Next Prediction Cycle
+
+
+ARCHITECTURE LAYERS:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Application Layer     │ FastAPI REST API, Web Dashboards, A/B Testing UI    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Orchestration Layer   │ Apache Airflow - Daily DAG runs, Feature sync, Model │
+│                       │                   Registry updates                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Feature Store Layer   │ PostgreSQL (offline), Redis (online cache)           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Data Persistence      │ PostgreSQL (1.4M events), Redis (95%+ cache hits)    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Infrastructure        │ Docker (6 services), Linux networking                │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Complete System Capabilities
+
+### Infrastructure & Data Layer
+- Docker containerization (6 services)
+- PostgreSQL database with 1.4M+ events
+- Synthetic data generation with reproducible seeds
+- 10% churn rate dataset (1,000 synthetic users)
+
+### Feature Engineering & Storage
+- 10 features per user
+- 8,000 feature vectors computed
+- Point-in-time correct computation
+- Dual feature store (offline PostgreSQL + online Redis)
+- 95%+ cache hit rate
+
+### Machine Learning
+- LogisticRegression model
+- AUC: 0.9979
+- Precision: 0.9954
+- Point-in-time validation
+
+### Online Serving & Performance
+- FastAPI REST API
+- Sub-millisecond latency (<0.5ms)
+- 2,334 predictions per second
+- Batch and single prediction support
+
+### Monitoring & Reliability
+- Drift detection (KS-test, Welch's t-test)
+- Performance tracking
+- Real-time alerting
+- Data quality metrics
+
+### Advanced Features
+- Model versioning and registry
+- Automated retraining pipeline
+- A/B testing framework
+- Production dashboards
+- Statistical significance testing
 
 ### Technology Stack
 
@@ -556,31 +672,51 @@ curl -X POST http://localhost:8000/predict/batch \
 
 ---
 
-## 🏆 What You Can Do
+## Portfolio: Technical Skills Demonstrated
 
-### As a Data Scientist
-- ✓ Register new model versions
-- ✓ Monitor retraining triggers
-- ✓ Analyze A/B test results
-- ✓ Export prediction data
+This project showcases production-grade ML engineering across the full data science pipeline:
 
-### As an ML Engineer
-- ✓ Deploy models safely
-- ✓ Run A/B experiments
-- ✓ Automate retraining
-- ✓ Monitor system health
+### Core Competencies
 
-### As a Product Manager
-- ✓ View dashboards
-- ✓ Track A/B results
-- ✓ Monitor performance
-- ✓ Schedule updates
+**Data Engineering**
+- Synthetic data generation with reproducible seeds (1.4M+ events)
+- PostgreSQL schema design with proper indexing and constraints
+- Point-in-time correct feature computation (preventing data leakage)
+- ETL pipelines with batch processing and incremental updates
 
-### As a DevOps Engineer
-- ✓ Scale containers
-- ✓ Manage backups
-- ✓ Deploy to cloud
-- ✓ Set up CI/CD
+**Machine Learning**
+- Model training with scikit-learn (LogisticRegression, AUC 0.9979)
+- Statistical validation (KS-test, Welch's t-test for drift detection)
+- A/B testing framework with significance testing
+- Model versioning and registry management
+- Automated retraining pipelines
+
+**Software Engineering**
+- FastAPI REST API design with async/concurrent request handling
+- Redis caching strategies (95%+ hit rate optimization)
+- Docker containerization (6 services orchestrated)
+- SOLID principles and clean code architecture
+- Comprehensive test coverage (unit + integration tests)
+
+**DevOps & Orchestration**
+- Apache Airflow DAG design with task dependencies
+- Docker Compose multi-service orchestration
+- Health checks and graceful degradation
+- Logging and monitoring infrastructure
+- Incremental data ingestion without backfill
+
+**Analytics & Monitoring**
+- Real-time metrics tracking (latency, throughput, AUC)
+- Data drift detection and performance monitoring
+- Dashboard APIs for visibility
+- Alert thresholds and anomaly detection
+
+### Demonstrated Scale & Performance
+- Handles 1,000+ users with 1.4M+ events
+- Sub-millisecond prediction latency (<0.5ms)
+- 2,334+ predictions per second throughput
+- 95%+ cache hit rate in production
+- Point-in-time correct validation (0% data leakage)
 
 ---
 
@@ -604,15 +740,17 @@ Built with production-grade engineering practices.
 - FastAPI
 - scikit-learn
 - SciPy
+- Apache Airflow
+- Docker
 
 ---
 
-## 💬 Questions?
+## Questions?
 
 - **API Issues?** → Check http://localhost:8000/docs
 - **Data Issues?** → See tests/ directory for examples
 - **Deployment?** → Review [QUICK_START.md](QUICK_START.md)
-- **Errors?** → Check [Troubleshooting](#-troubleshooting)
+- **Errors?** → Check [Troubleshooting](#troubleshooting)
 
 ---
 
