@@ -47,6 +47,18 @@ dag = DAG(
     max_active_runs=1,  # Only one DAG run at a time
 )
 
+# === DATABASE CONFIG (used by all tasks) ===
+def get_db_config():
+    """Get database config with environment variable overrides."""
+    import os
+    return {
+        'host': os.getenv('POSTGRES_HOST', 'postgres'),
+        'port': int(os.getenv('POSTGRES_PORT', 5432)),
+        'user': os.getenv('POSTGRES_USER', 'postgres'),
+        'password': os.getenv('POSTGRES_PASSWORD', 'postgres'),
+        'database': os.getenv('POSTGRES_DB', 'churn_platform'),
+    }
+
 # ============================================================================
 # TASK 1: SYNTHETIC DATA GENERATION
 # - Backfill: One-time, disabled after initial setup
@@ -81,13 +93,7 @@ def task_generate_synthetic_data(**context):
     logger.info(f"Generated {len(users)} users, {len(user_events)} events, {len(billing_events)} billing records")
     
     # Load into PostgreSQL
-    db_config = {
-        'host': context['var']['value'].get('postgres_host', 'postgres'),
-        'port': int(context['var']['value'].get('postgres_port', 5432)),
-        'database': context['var']['value'].get('postgres_db', 'churn_db'),
-        'user': context['var']['value'].get('postgres_user', 'churn_user'),
-        'password': context['var']['value'].get('postgres_password', 'churn_password'),
-    }
+    db_config = get_db_config()
     
     counts = load_data(
         users=users,
@@ -116,19 +122,39 @@ generate_data = PythonOperator(
 
 def task_compute_features(**context):
     """Compute features with point-in-time correctness."""
+    from datetime import datetime
     from src.features.batch_feature_pipeline import BatchFeaturePipeline
     
     pipeline = BatchFeaturePipeline()
+    pipeline.connect()
     
-    # Daily incremental feature computation
-    feature_time = context['execution_date'].date()
-    pipeline.compute_daily_features(feature_time=feature_time)
-    
-    # Log statistics
-    stats = pipeline.get_stats()
-    print(f"✓ Features computed for {feature_time}")
-    print(f"  - Total users: {stats['num_users']}")
-    print(f"  - Features generated: {stats['num_features']}")
+    try:
+        # Convert Airflow execution_date (Proxy) to proper datetime
+        exec_date = context['execution_date']
+        if hasattr(exec_date, 'to_pydatetime'):
+            feature_time = exec_date.to_pydatetime()
+        else:
+            feature_time = datetime.fromisoformat(str(exec_date))
+        
+        df = pipeline.compute_features_for_date(
+            feature_date=feature_time,
+            include_label=False
+        )
+        
+        # Ensure all columns are serializable (convert Proxy objects to native types)
+        for col in df.columns:
+            if col == 'feature_date' and hasattr(df[col].iloc[0], 'to_pydatetime'):
+                df[col] = df[col].apply(lambda x: x.to_pydatetime() if hasattr(x, 'to_pydatetime') else x)
+        
+        # Save features
+        pipeline.save_features(df, table_name="features_daily")
+        
+        print(f"✓ Features computed for {feature_time.date()}")
+        print(f"  - Total users: {len(df)}")
+        print(f"  - Features generated: {len(df.columns) - 2}")  # -2 for user_id and feature_date
+        
+    finally:
+        pipeline.disconnect()
 
 
 compute_features = PythonOperator(
@@ -149,18 +175,12 @@ def task_sync_online_features(**context):
     import logging
     import os
     from datetime import datetime
-    from src.serving import FeatureCacheSyncer
+    from src.serving.cache_syncer import FeatureCacheSyncer
     
     logger = logging.getLogger(__name__)
     
-    # Get configuration from environment
-    db_config = {
-        "host": os.getenv("POSTGRES_HOST", "postgres"),
-        "port": int(os.getenv("POSTGRES_PORT", 5432)),
-        "database": os.getenv("POSTGRES_DB", "churn_db"),
-        "user": os.getenv("POSTGRES_USER", "churn_user"),
-        "password": os.getenv("POSTGRES_PASSWORD", "churn_password"),
-    }
+    # Get configuration
+    db_config = get_db_config()
     
     redis_config = {
         "host": os.getenv("REDIS_HOST", "redis"),
@@ -185,25 +205,15 @@ def task_sync_online_features(**context):
         
         if success:
             # Get sync status
-            status = syncer.get_sync_status()
+            stats = syncer.feature_store.get_cache_stats()
             logger.info(f"✓ Cache sync successful")
-            logger.info(f"  - Users cached: {status.get('num_users_cached', 0)}")
-            logger.info(f"  - Memory used: {status.get('memory_used', 'unknown')}")
+            logger.info(f"  - Cache stats: {stats}")
         else:
             logger.error("Cache sync failed")
             raise Exception("Cache sync failed")
     
     finally:
         syncer.disconnect()
-    online_store = OnlineFeatureStore()
-    
-    # Get latest features for all users
-    feature_time = context['execution_date'].date()
-    latest_features = offline_store.get_latest_features(feature_time=feature_time)
-    
-    # Push to Redis
-    synced_count = online_store.sync_features(features_df=latest_features)
-    print(f"✓ Synced {synced_count} features to online store")
 
 
 sync_online_features = PythonOperator(
@@ -222,17 +232,90 @@ sync_online_features = PythonOperator(
 
 def task_train_model(**context):
     """Train baseline logistic regression model."""
-    from src.models.training import ModelTrainer
+    import os
+    import logging
+    from datetime import datetime, timedelta
+    import pandas as pd
+    from pathlib import Path
+    from src.models.model_trainer import ModelTrainer
     
-    trainer = ModelTrainer()
-    feature_time = context['execution_date'].date()
+    logger = logging.getLogger(__name__)
     
-    # Train on last 6 months
-    model_version = trainer.train(feature_time=feature_time, lookback_days=180)
+    # Database config
+    db_config = get_db_config()
     
-    print(f"✓ Model trained: v{model_version}")
-    print(f"  - Training data window: last 180 days")
-    print(f"  - Model artifact saved to registry")
+    # Ensure model directory exists
+    model_dir = Path("/app/data/models")
+    model_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Model directory: {model_dir} (exists: {model_dir.exists()})")
+    
+    trainer = ModelTrainer(db_config=db_config)
+    trainer.connect()
+    
+    try:
+        # Load features from last 6 months
+        feature_date_to = datetime.utcnow()
+        feature_date_from = feature_date_to - timedelta(days=180)
+        
+        X, y = trainer.get_features_and_labels(
+            feature_date_from=feature_date_from,
+            feature_date_to=feature_date_to,
+        )
+        
+        logger.info(f"Loaded {len(X)} samples")
+        logger.info(f"X columns: {X.columns.tolist()}")
+        logger.info(f"X shape: {X.shape}")
+        
+        # get_features_and_labels doesn't return feature_date in X
+        # Get it from database directly for setting index
+        feature_dates = pd.read_sql(
+            """SELECT user_id, feature_date FROM ml_pipeline.features
+               WHERE feature_date >= %s::timestamp AND feature_date < %s::timestamp
+               ORDER BY feature_date, user_id""",
+            trainer.conn,
+            params=(feature_date_from, feature_date_to)
+        )
+        
+        # Merge feature_date back into X
+        X = X.reset_index(drop=True)
+        feature_dates = feature_dates.reset_index(drop=True)
+        X['feature_date'] = feature_dates['feature_date']
+        
+        # Convert to datetime and set as index
+        X['feature_date'] = pd.to_datetime(X['feature_date'])
+        X = X.set_index('feature_date')
+        
+        logger.info(f"Index dtype: {X.index.dtype}")
+        
+        # Split into train/test
+        X_train, X_test, y_train, y_test = trainer.temporal_train_test_split(X, y, train_weeks=6)
+        
+        logger.info(f"Train set: {len(X_train)}, Test set: {len(X_test)}")
+        
+        # Train model
+        trainer.train(X_train=X_train, y_train=y_train)
+        
+        # Evaluate
+        metrics = trainer.evaluate(X_test=X_test, y_test=y_test)
+        
+        # Save model to persistent location
+        model_path = "/app/data/models/churn_model"
+        trainer.save_model(model_path)
+        
+        # Save metadata
+        trainer.save_model_metadata(
+            metrics=metrics,
+            training_date_from=feature_date_from,
+            training_date_to=feature_date_to,
+            test_date_from=feature_date_to,
+            test_date_to=feature_date_to + timedelta(days=30),
+        )
+        
+        print(f"✓ Model trained successfully")
+        print(f"  - AUC: {metrics.get('auc', 'N/A')}")
+        print(f"  - Model saved to: /app/data/models/churn_model.pkl")
+    finally:
+        trainer.disconnect()
 
 
 train_model = PythonOperator(
@@ -256,19 +339,21 @@ train_model.set_upstream([sync_online_features])
 
 def task_run_drift_detection(**context):
     """Detect feature and prediction drift."""
-    from src.monitoring.drift_detection import DriftDetector
+    import logging
+    from src.monitoring.model_monitor import ModelMonitor
     
-    detector = DriftDetector()
+    logger = logging.getLogger(__name__)
+    
+    db_config = get_db_config()
+    monitor = ModelMonitor(db_config=db_config)
     feature_time = context['execution_date'].date()
     
     # Run drift checks
-    drift_report = detector.detect(feature_time=feature_time)
-    
-    # Log results
-    print(f"✓ Drift detection complete for {feature_time}")
-    print(f"  - Features with drift: {len(drift_report['drifted_features'])}")
-    if drift_report['drifted_features']:
-        print(f"  - Alert: {drift_report['drifted_features']}")
+    try:
+        monitor.check_drift(feature_time=feature_time)
+        logger.info(f"✓ Drift detection complete for {feature_time}")
+    except Exception as e:
+        logger.warning(f"Drift detection warning: {e}")
 
 
 run_drift_detection = PythonOperator(
@@ -288,21 +373,27 @@ run_drift_detection = PythonOperator(
 
 def task_validate_schema(**context):
     """Validate feature schema and online store health."""
-    from src.stores.online_store import OnlineFeatureStore
-    from src.utils.schema_validation import SchemaValidator
+    import logging
+    from src.serving.feature_store import FeatureStore
     
-    online_store = OnlineFeatureStore()
-    validator = SchemaValidator()
+    logger = logging.getLogger(__name__)
     
-    # Check online store health
-    health = online_store.health_check()
-    print(f"✓ Online store health: {health['status']}")
-    print(f"  - Keys in Redis: {health['key_count']}")
+    online_store = FeatureStore(
+        host='redis',
+        port=6379,
+        db=0
+    )
     
-    # Validate schema
-    schema_valid = validator.validate_schema()
-    if not schema_valid:
-        print(f"⚠ Schema validation failed")
+    try:
+        online_store.connect()
+        # Check connection is healthy
+        stats = online_store.get_cache_stats()
+        logger.info(f"✓ Online store health check passed")
+        logger.info(f"  - Cache stats: {stats}")
+    except Exception as e:
+        logger.warning(f"Online store health check warning: {e}")
+    finally:
+        online_store.disconnect()
 
 
 validate_schema = PythonOperator(

@@ -46,7 +46,9 @@ services:
 
   # ========== AIRFLOW DATABASE INIT ==========
   airflow-init:
-    image: apache/airflow:2.7.3-python3.10
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.airflow
     container_name: churn-airflow-init
     entrypoint: /bin/bash
     command:
@@ -79,7 +81,9 @@ services:
 
   # ========== AIRFLOW WEBSERVER ==========
   airflow-webserver:
-    image: apache/airflow:2.7.3-python3.10
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.airflow
     container_name: churn-airflow-webserver
     command: webserver
     environment:
@@ -110,7 +114,9 @@ services:
 
   # ========== AIRFLOW SCHEDULER ==========
   airflow-scheduler:
-    image: apache/airflow:2.7.3-python3.10
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.airflow
     container_name: churn-airflow-scheduler
     command: scheduler
     environment:
@@ -128,6 +134,7 @@ services:
       - ./airflow_dags:/opt/airflow/dags
       - ./src:/opt/airflow/src
       - ./config:/opt/airflow/config
+      - ./data:/app/data
       - airflow_logs:/opt/airflow/logs
     networks:
       - churn_network

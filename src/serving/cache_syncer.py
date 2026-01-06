@@ -113,7 +113,8 @@ class FeatureCacheSyncer:
         feature_date: datetime,
     ) -> Dict[int, Dict[str, float]]:
         """
-        Compute features for all users at a specific date.
+        Load pre-computed features from database instead of recomputing.
+        Features are already computed and stored by the DAG's compute_features task.
 
         Args:
             user_ids: List of user IDs
@@ -124,32 +125,48 @@ class FeatureCacheSyncer:
         """
         features_dict = {}
 
-        logger.info(f"Computing features for {len(user_ids)} users at {feature_date.date()}...")
+        logger.info(f"Loading features for {len(user_ids)} users from database for {feature_date.date()}...")
 
-        for idx, user_id in enumerate(user_ids):
-            if (idx + 1) % 100 == 0:
-                logger.info(f"  Progress: {idx + 1}/{len(user_ids)}")
+        # Query features_daily table for the specific date
+        cursor = self.feature_pipeline.conn.cursor()
+        try:
+            # Load features computed for this date from the database
+            cursor.execute("""
+                SELECT user_id, * 
+                FROM features_daily
+                WHERE DATE(feature_date) = %s
+                ORDER BY user_id
+            """, (feature_date.date(),))
+            
+            rows = cursor.fetchall()
+            
+            if not rows:
+                logger.warning(f"No features found in database for {feature_date.date()}. They may not have been computed yet.")
+                return features_dict
+            
+            # Get column names
+            col_names = [desc[0] for desc in cursor.description]
+            
+            # Convert rows to dictionary
+            for row in rows:
+                row_dict = dict(zip(col_names, row))
+                user_id = row_dict.pop('user_id')  # Extract user_id
+                row_dict.pop('feature_date', None)  # Remove feature_date
+                row_dict.pop('id', None)  # Remove auto-increment id if exists
+                row_dict.pop('created_at', None)  # Remove timestamp if exists
+                
+                features_dict[user_id] = row_dict
+            
+            logger.info(f"  ✓ Loaded features for {len(features_dict)} users from database")
+            
+            if len(rows) % 100 == 0:
+                logger.info(f"  Progress: {len(rows)}/{len(user_ids)}")
 
-            try:
-                # Compute all features for this user
-                features = self.feature_pipeline.compute_features_for_user(
-                    user_id=user_id,
-                    feature_date=feature_date,
-                    feature_names=None,  # Uses default extended features
-                )
-
-                # Convert to flat dictionary (remove metadata if present)
-                features_clean = {
-                    k: v for k, v in features.items()
-                    if k not in ["user_id", "feature_date"]
-                }
-
-                features_dict[user_id] = features_clean
-
-            except Exception as e:
-                logger.warning(f"Error computing features for user {user_id}: {e}")
-                # Use default feature values on error
-                features_dict[user_id] = self._get_default_features()
+        except Exception as e:
+            logger.error(f"Error loading features from database: {e}", exc_info=True)
+            raise
+        finally:
+            cursor.close()
 
         return features_dict
 

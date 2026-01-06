@@ -12,6 +12,10 @@ apache-airflow==2.7.3
 apache-airflow-providers-postgres==5.7.1
 apache-airflow-providers-redis==3.4.0
 
+# === HTTP CLIENT FIX (prevent httpx/httpcore conflict with Airflow) ===
+httpcore==1.0.2
+httpx==0.25.1
+
 # === DATABASE DRIVERS ===
 psycopg2-binary==2.9.9
 redis==4.5.4

@@ -154,13 +154,16 @@ async def startup_event():
         _feature_store.connect()
         logger.info("✓ Feature store initialized")
 
-        # Initialize online server
-        model_path = "/tmp/churn_model"
+        # Initialize online server (model optional on startup)
+        model_path = "/app/data/models/churn_model"
         _server = OnlineFeatureServer(
             model_path=model_path,
             feature_store=_feature_store,
         )
-        logger.info("✓ Online server initialized")
+        if _server.model is None:
+            logger.warning("⚠️  Model not loaded - train a model first with: python3 src/models/model_trainer.py")
+        else:
+            logger.info("✓ Online server initialized")
 
         # Initialize syncer
         db_config = get_db_config()

@@ -3,6 +3,7 @@
 .PHONY: db-connect db-backup db-restore db-clean
 .PHONY: shell redis logs-postgres logs-redis logs-fastapi
 .PHONY: version health predict batch-predict
+.PHONY: airflow-restart airflow-logs airflow-trigger train airflow-clear-dag airflow-clear-task airflow-run-task
 
 # Color output
 BLUE := \033[0;34m
@@ -331,8 +332,68 @@ docs: ## Display quick reference
 	@echo "  Dashboard:           make dashboard"
 	@echo "  Cache sync:          make cache-sync"
 	@echo ""
+	@echo "Airflow & Training:"
+	@echo "  Restart scheduler:   make airflow-restart"
+	@echo "  View DAG logs:       make airflow-logs"
+	@echo "  Trigger DAG now:     make airflow-trigger"
+	@echo "  Manual training:     make train"
+	@echo ""
 	@echo "Development:"
 	@echo "  Shell:               make shell"
 	@echo "  Redis:               make redis"
 	@echo "  Python:              make python-shell"
 	@echo ""
+
+##@ Airflow & Training
+
+airflow-restart: ## Restart Airflow scheduler (pick up DAG changes)
+	@echo "$(BLUE)Restarting Airflow scheduler...$(NC)"
+	@docker-compose restart airflow-scheduler
+	@echo "$(GREEN)✓ Airflow scheduler restarted$(NC)"
+	@sleep 2
+	@docker-compose logs airflow-scheduler | tail -5
+
+airflow-logs: ## View Airflow scheduler logs
+	@echo "$(BLUE)Airflow scheduler logs (last 50 lines):$(NC)"
+	@docker-compose logs airflow-scheduler | tail -50
+
+airflow-trigger: ## Trigger churn_platform_main DAG immediately
+	@echo "$(BLUE)Triggering DAG: churn_platform_main$(NC)"
+	@docker-compose exec airflow-scheduler airflow dags trigger churn_platform_main
+	@echo "$(GREEN)✓ DAG triggered$(NC)"
+	@echo "$(YELLOW)View progress with: make airflow-logs$(NC)"
+
+airflow-clear-dag: ## Clear entire DAG run (runs all tasks again)
+	@echo "$(YELLOW)Clearing all tasks for churn_platform_main...$(NC)"
+	@docker-compose exec airflow-scheduler airflow dags test churn_platform_main 2>&1 | grep -i clear || \
+	docker-compose exec airflow-scheduler airflow tasks clear churn_platform_main -c
+	@echo "$(GREEN)✓ DAG cleared$(NC)"
+	@echo "$(YELLOW)Next: make airflow-trigger$(NC)"
+
+airflow-clear-task: ## Clear a specific task and downstream tasks (TASK=task_name)
+	@if [ -z "$(TASK)" ]; then \
+		echo "$(RED)Error: Please specify task name$(NC)"; \
+		echo "Usage: make airflow-clear-task TASK=sync_online_features"; \
+		exit 1; \
+	fi
+	@echo "$(YELLOW)Clearing task '$(TASK)' and all downstream tasks...$(NC)"
+	@docker-compose exec airflow-scheduler airflow tasks clear churn_platform_main -t $(TASK) --downstream -y
+	@echo "$(GREEN)✓ Task cleared$(NC)"
+	@echo "$(YELLOW)Next: make airflow-trigger$(NC)"
+
+airflow-run-task: ## Run a specific task directly (TASK=task_name)
+	@if [ -z "$(TASK)" ]; then \
+		echo "$(RED)Error: Please specify task name$(NC)"; \
+		echo "Usage: make airflow-run-task TASK=train_model"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)Running task '$(TASK)'...$(NC)"
+	@docker-compose exec airflow-scheduler airflow tasks run churn_platform_main $(TASK) 2026-01-05T01:00:00+00:00 --local
+	@echo "$(GREEN)✓ Task complete$(NC)"
+
+train: ## Manually run training script (saves to /app/data/models/)
+	@echo "$(BLUE)Running manual training...$(NC)"
+	@docker-compose exec fastapi python3 src/models/train.py
+	@echo "$(GREEN)✓ Training complete$(NC)"
+	@echo "$(YELLOW)Model saved to: /app/data/models/churn_model.pkl$(NC)"
+

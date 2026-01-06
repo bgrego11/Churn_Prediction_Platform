@@ -68,11 +68,13 @@ class OnlineFeatureServer:
                 self.scaler = None
 
         except FileNotFoundError as e:
-            logger.error(f"Model not found: {e}")
-            raise
+            logger.warning(f"Model not found: {e}. API will start but predictions will not be available until model is trained.")
+            self.model = None
+            self.scaler = None
         except Exception as e:
             logger.error(f"Error loading model: {e}")
-            raise
+            self.model = None
+            self.scaler = None
 
     def predict(self, user_id: int) -> Dict:
         """
