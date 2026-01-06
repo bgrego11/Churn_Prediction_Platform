@@ -654,7 +654,6 @@ curl -X POST http://localhost:8000/predict/batch \
 
 | Document | Purpose |
 |----------|---------|
-| [PHASE7_COMPLETE.md](PHASE7_COMPLETE.md) | Detailed Phase 7 documentation |
 | [tests/README.md](tests/README.md) | Testing guide with examples |
 | [QUICK_START.md](QUICK_START.md) | User-focused quick start |
 | API Docs | http://localhost:8000/docs |

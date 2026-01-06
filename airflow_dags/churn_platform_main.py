@@ -240,8 +240,15 @@ def task_train_model(**context):
     from src.models.model_trainer import ModelTrainer
     
     logger = logging.getLogger(__name__)
+        # Only run on Mon-Tue-Wed (0=Monday, 1=Tuesday, 2=Wednesday)
+    execution_date = context['execution_date']
+    weekday = execution_date.weekday()
+    if weekday > 2:  # Thursday=3, Friday=4, Saturday=5, Sunday=6
+        logger.info(f"Skipping training on {execution_date.strftime('%A')} (weekday={weekday}). Training only on Mon-Tue-Wed.")
+        return
     
-    # Database config
+    logger.info(f"Running training on {execution_date.strftime('%A')} (weekday={weekday})")
+        # Database config
     db_config = get_db_config()
     
     # Ensure model directory exists
