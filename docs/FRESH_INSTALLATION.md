@@ -32,52 +32,54 @@ cd Churn_Prediction_Platform
 
 ---
 
-## Step 2: Create Required Directories
+## Step 2: Verify Required Directories
 
-The platform needs several directories for volumes and data storage:
+Your project already has the `./data` directory with the trained model. Verify it exists:
 
 ```bash
-# Create data directories
-mkdir -p data/models
-mkdir -p data/features
-mkdir -p data/raw
-mkdir -p data/logs
-mkdir -p data/backups
-
-# Create Airflow directories
-mkdir -p airflow
-mkdir -p airflow/logs
-mkdir -p airflow/plugins
-
-# Verify creation
+# Check data directory
 ls -la data/
-ls -la airflow/
+
+# Expected output:
+# models/           (contains trained models)
+# features/         (created by platform when caching features)
+# logs/             (created by platform when needed)
 ```
 
-**Why these directories?**
-- `data/models/` - Persists trained ML models across container restarts
-- `data/features/` - Caches computed features (optional offline store)
-- `data/raw/` - Raw data backups and exports
-- `data/logs/` - Platform logs and audit trails
-- `airflow/logs/` - DAG execution logs
-- `airflow/plugins/` - Custom Airflow plugins
+**About directories in this project:**
+- `data/` - Bind-mounted to containers as `/app/data`
+- `data/models/` - Already exists (contains your trained models)
+- `data/features/` - Created automatically when platform caches features
+- `airflow/logs/` - Docker-managed named volume (created automatically)
+- `postgres_data/` - Docker-managed named volume (created automatically)
+- `redis_data/` - Docker-managed named volume (created automatically)
+
+**Important:** You DON'T need to pre-create `airflow/logs/`, `postgres_data/`, or `redis_data/`. Docker automatically creates and manages these named volumes.
 
 ---
 
-## Step 3: Verify Environment File
+## Step 3: Update Environment File for Your Machine
 
-The `.env` file should already exist in the repository. Review and adjust if needed for your system:
+The `.env` file exists but has hard-coded paths from the original developer's machine (`/Users/ben/...`). **You must update these:**
 
 ```bash
-# Check .env exists
-cat .env
+# Check .env exists and has hard-coded paths
+cat .env | grep "Users/ben"
 
-# Key variables to verify:
-# - POSTGRES_HOST=postgres (for Docker)
-# - AIRFLOW__CORE__DAGS_FOLDER (path to airflow_dags)
-# - OFFLINE_FEATURE_STORE_PATH (path to data/features)
-# - MODEL_ARTIFACT_PATH (path to data/models)
+# If you see paths like "/Users/ben/Churn_Prediction_Platform", update them:
+PROJECT_DIR=$(pwd)
+sed -i.bak "s|/Users/ben/Churn_Prediction_Platform|$PROJECT_DIR|g" .env
+
+# Verify REDIS_HOST is set correctly for Docker (not localhost):
+grep REDIS_HOST .env
+# Should show: REDIS_HOST=redis (not localhost)
 ```
+
+**Key variables to verify:**
+- `POSTGRES_HOST=postgres` (Docker service name)
+- `REDIS_HOST=redis` (Docker service name, NOT localhost)
+- `AIRFLOW__CORE__DAGS_FOLDER` points to your actual `airflow_dags` directory
+- `MODEL_ARTIFACT_PATH` points to your actual `data/models` directory
 
 **For production deployments:**
 - Change `ENV=development` to `ENV=production`
@@ -93,17 +95,22 @@ cat .env
 # Start all containers in background
 docker-compose up -d
 
+# Docker will automatically create named volumes:
+# - postgres_data (PostgreSQL persistence)
+# - redis_data (Redis persistence)  
+# - airflow_logs (Airflow execution logs)
+
 # Wait for services to initialize (PostgreSQL takes 10-15 seconds)
-sleep 15
+sleep 20
 
 # Verify all containers are running
 docker-compose ps
 
 # Expected output:
 # - churn-postgres: Up (Healthy)
-# - churn-redis: Up
+# - churn-redis: Up (Healthy)
 # - churn-fastapi: Up
-# - airflow-init: Up (will exit after initialization)
+# - airflow-init: Exited 0 (initialization complete)
 # - airflow-webserver: Up
 # - airflow-scheduler: Up
 ```
@@ -244,9 +251,9 @@ make test-phase7   # A/B testing
 - Models must be saved to `./data/models` (mounted) to survive restarts
 
 **Airflow Setup:**
-- `airflow/logs/` directory must exist for log writing
-- DAG folder path in `.env` must match actual location
-- First startup creates airflow.cfg automatically
+- `airflow_logs` is a Docker-managed named volume (created automatically)
+- DAG folder path in `.env` must match your actual `airflow_dags` location
+- First startup creates Airflow metadata DB automatically
 - Webserver UI available at http://localhost:8080
 
 ---
@@ -255,16 +262,17 @@ make test-phase7   # A/B testing
 
 ```bash
 ☐ Clone repository
-☐ Create data/ and airflow/ directories
-☐ Verify .env exists and paths are correct
+☐ Verify data/ directory exists (should already be there)
+☐ Update .env paths from /Users/ben/... to your actual directory
+☐ Fix REDIS_HOST=redis if it says localhost
 ☐ docker-compose up -d
-☐ Wait 15 seconds for services to start
+☐ Wait 20 seconds for services to start
 ☐ Verify all containers running: docker-compose ps
 ☐ Test API: curl http://localhost:8000/health
-☐ Generate initial data: make test-phase2
-☐ Run test suite: make test
-☐ Access Airflow UI: http://localhost:8080
-☐ Verify Airflow DAG: make airflow-trigger
+☐ Generate initial data: docker-compose exec airflow-webserver python tests/phase2/test_data_generation.py
+☐ Train model: docker-compose exec airflow-webserver python tests/phase4/test_model_training.py
+☐ Make prediction: curl http://localhost:8000/predict/1
+☐ Access Airflow UI: http://localhost:8080 (admin/admin)
 ```
 
 ---
